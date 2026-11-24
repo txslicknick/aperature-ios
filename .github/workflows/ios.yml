@@ -80,6 +80,5 @@ jobs:
           SIZE=$(stat -f%z Aperature-iOS.ipa)
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           MSG=$(git log -1 --format=%s | head -c 200)
-          printf '{"version":"1.0.%s","buildVersion":"%s","size":%s,"date":"%s","message":%s}
-' "$N" "$N" "$SIZE" "$NOW" "$(printf '%s' "$MSG" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" > Aperature-iOS.json
+          printf '{"version":"1.0.%s","buildVersion":"%s","size":%s,"date":"%s","message":%s}\n' "$N" "$N" "$SIZE" "$NOW" "$(printf '%s' "$MSG" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" > Aperature-iOS.json
           gh release create "v1.0.$N" Aperature-iOS.ipa Aperature-iOS.json --repo "$GITHUB_REPOSITORY" --title "Aperature for iPhone 1.0.$N" --notes "$MSG" --latest
