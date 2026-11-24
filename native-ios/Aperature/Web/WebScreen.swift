@@ -140,6 +140,11 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
             guard let data = try? JSONSerialization.data(withJSONObject: [n]), let arr = String(data: data, encoding: .utf8) else { return }
             self?.web.evaluateJavaScript("window.__apSkips && window.__apSkips(\(arr)[0], \(i), \(d))", completionHandler: nil)
         }
+        // v1.0.57: where you are, every ~12 s and on pause / seek / next episode / background → window.__apNativeTick(n, i, p, d, why)
+        vc.pushPos = { [weak self] n, i, p, d, why in
+            guard let data = try? JSONSerialization.data(withJSONObject: [n, why]), let arr = String(data: data, encoding: .utf8) else { return }
+            self?.web.evaluateJavaScript("window.__apNativeTick && window.__apNativeTick(\(arr)[0], \(i), \(p), \(d), \(arr)[1])", completionHandler: nil)
+        }
         vc.modalPresentationStyle = .fullScreen
         player = vc
         present(vc, animated: true)

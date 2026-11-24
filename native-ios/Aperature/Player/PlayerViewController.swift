@@ -42,6 +42,26 @@ final class PlayerViewController: UIViewController, MPVDelegate {
     private let spinner = UIActivityIndicatorView(style: .large)
     // v1.0.5: Skip intro / recap and Next episode, from the episode's times (Aperature asks AniSkip / IntroDB)
     var askSkips: ((String, Int, Int) -> Void)?
+    // v1.0.57 (the owner: "in the middle of ep 10 on my PC, my phone should pick up there"): where you are, sent to the page
+    // every ~12 s while playing and at once on pause / play / a jump / the next episode / going to the background
+    var pushPos: ((String, Int, Double, Double, String) -> Void)?
+    private var pushAt = Date.distantPast, pushIdx = -1, pushPaused = false, pushLast = 0.0
+    private func posPush(_ why: String? = nil) {
+        guard let m = mpv, let push = pushPos, m.duration > 60, m.position > 5 else { return }
+        let paused = m.getString("pause") == "yes"
+        var reason = why
+        if reason == nil {
+            if m.playlistPos != pushIdx { reason = "file" }
+            else if paused != pushPaused { reason = paused ? "pause" : "play" }
+            else if abs(m.position - pushLast) > 8 && !paused && Date().timeIntervalSince(pushAt) > 3 { reason = "seek" }
+            else if !paused && Date().timeIntervalSince(pushAt) >= 12 { reason = "tick" }
+        }
+        pushIdx = m.playlistPos; pushPaused = paused
+        pushLast = m.position + 1.0   // (it moves a second between looks)
+        guard let r = reason else { return }
+        pushAt = Date()
+        push(job.n, m.playlistPos, m.position, m.duration, r)
+    }
     private struct Skips { var intro: [Double]?; var recap: [Double]?; var outro: [Double]?; var auto: Bool }
     private var skips: [Int: Skips] = [:]
     private var askedSkips = Set<Int>()
@@ -495,6 +515,7 @@ final class PlayerViewController: UIViewController, MPVDelegate {
         // v1.0.55 (the owner: a finished episode is watched, one you skipped or left isn't): each one played past 90%
         if m.duration > 60 && m.position >= m.duration * 0.9 { finishedIdx.insert(m.playlistPos) }
         extSubsTick()   // (v1.0.56)
+        posPush()   // (v1.0.57)
         if let at = sleepAt {
             let left = at.timeIntervalSinceNow
             if left <= 60 && !sleepNoted { sleepNoted = true; note("Sleeping in 1 minute"); showControls() }
@@ -849,6 +870,7 @@ final class PlayerViewController: UIViewController, MPVDelegate {
     // v1.0.80 (iOS): with Picture in Picture, leaving the app while it plays carries on in the PiP window. Without it
     // (no PiP on this device, paused, PiP turned off in Settings, or it didn't start) the player pauses as it always has.
     @objc private func background() {
+        posPush("bg")
         if let p = pip, p.isActive { return }                       // (started from the button: it plays on in PiP)
         if let p = pip, p.isPossible, !paused, !finished, mpv?.everPlayed == true {
             // iOS starts PiP by itself (canStartPictureInPictureAutomaticallyFromInline): no GPU drawing meanwhile, and
