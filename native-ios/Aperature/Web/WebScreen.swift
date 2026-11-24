@@ -143,7 +143,11 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         // v1.0.57: where you are, every ~12 s and on pause / seek / next episode / background → window.__apNativeTick(n, i, p, d, why)
         vc.pushPos = { [weak self] n, i, p, d, why in
             guard let data = try? JSONSerialization.data(withJSONObject: [n, why]), let arr = String(data: data, encoding: .utf8) else { return }
+            // (going to the background: iOS may suspend the page at once — a short background task lets the page send it)
+            var bg = UIBackgroundTaskIdentifier.invalid
+            if why == "bg" { bg = UIApplication.shared.beginBackgroundTask(expirationHandler: nil) }
             self?.web.evaluateJavaScript("window.__apNativeTick && window.__apNativeTick(\(arr)[0], \(i), \(p), \(d), \(arr)[1])", completionHandler: nil)
+            if bg != .invalid { DispatchQueue.main.asyncAfter(deadline: .now() + 6) { UIApplication.shared.endBackgroundTask(bg) } }
         }
         vc.modalPresentationStyle = .fullScreen
         player = vc
