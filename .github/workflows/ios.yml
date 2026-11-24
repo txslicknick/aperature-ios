@@ -1,0 +1,85 @@
+# Aperature for iPhone — built on GitHub's Macs (no Mac needed at home). This public repo holds only the app's source:
+# every push builds an unsigned IPA and publishes it as a release asset (Aperature-iOS.ipa + Aperature-iOS.json),
+# which aperature.lol fetches for SideStore. No secrets are used.
+name: iOS app
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write   # (v1.17.3: to clear old build copies — the newest 3 stay)
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: native-ios
+    env:
+      # (the app's builds count on from the private repo's last one: 1.0.56 there)
+      BUILD_NO: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app || sudo xcode-select -s /Applications/Xcode_16.2.app || true; xcodebuild -version
+      # v1.0.80 (iOS): the several-connections loader (Aperature/Player/FastLoad.swift — the same file the app is built
+      # with) is proven on this Mac before the app is built: byte-exact, jumps, speed, a player going away, a server
+      # without ranges, a failing server, real FFmpeg playing and seeking through it. A failure stops the build here.
+      - name: Loader test
+        working-directory: native-ios/FastLoadTest
+        timeout-minutes: 25
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          set -eo pipefail
+          command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null || brew install ffmpeg
+          ffmpeg -version | head -1 || true
+          xcrun swiftc -O -target "$(uname -m)-apple-macosx13.0" -o "$RUNNER_TEMP/fastload-test" main.swift ../Aperature/Player/FastLoad.swift
+          "$RUNNER_TEMP/fastload-test" origin.py
+      - name: Project
+        run: brew install xcodegen && xcodegen generate
+      - name: Packages
+        # (v1.17.2: GitHub's release downloads can fail for a while (504); a failed try leaves a half file that blocks the
+        # next one — so clear it and try again, up to 5 times)
+        run: |
+          for i in 1 2 3 4 5; do
+            if xcodebuild -resolvePackageDependencies -project Aperature.xcodeproj -scheme Aperature -clonedSourcePackagesDirPath build/spm; then exit 0; fi
+            echo "::warning::package download failed (try $i) — clearing and retrying"
+            rm -rf ~/Library/Caches/org.swift.swiftpm/artifacts build/spm/artifacts
+            sleep $((i * 60))
+          done
+          exit 1
+      - name: Build (unsigned)
+        run: |
+          set -o pipefail   # (a failed build must stop here — never publish an app without its executable)
+          xcodebuild -project Aperature.xcodeproj -scheme Aperature -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' -clonedSourcePackagesDirPath build/spm -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CURRENT_PROJECT_VERSION=$((100 + BUILD_NO)) MARKETING_VERSION=1.0.$((100 + BUILD_NO)) build | xcbeautify || exit ${PIPESTATUS[0]}
+          mkdir -p build/ipa/Payload
+          cp -R build/dd/Build/Products/Release-iphoneos/Aperature.app build/ipa/Payload/
+          test -s build/ipa/Payload/Aperature.app/Aperature || { echo "::error::Aperature.app has no executable — not publishing"; exit 1; }
+          (cd build/ipa && zip -qry ../Aperature-unsigned.ipa Payload)
+          echo "== app contents"; du -sh build/ipa/Payload/Aperature.app; ls -la build/ipa/Payload/Aperature.app; ls build/ipa/Payload/Aperature.app/Frameworks 2>/dev/null || echo "(no embedded frameworks)"
+          ls -la build/Aperature-unsigned.ipa
+      # SideStore (free Apple ID): the IPA and its source list go on the site; SideStore updates the app by itself
+      - name: Publish the IPA as a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          N=$((100 + BUILD_NO))
+          cp build/Aperature-unsigned.ipa Aperature-iOS.ipa
+          SIZE=$(stat -f%z Aperature-iOS.ipa)
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          MSG=$(git log -1 --format=%s | head -c 200)
+          printf '{"version":"1.0.%s","buildVersion":"%s","size":%s,"date":"%s","message":%s}
+' "$N" "$N" "$SIZE" "$NOW" "$(printf '%s' "$MSG" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" > Aperature-iOS.json
+          gh release create "v1.0.$N" Aperature-iOS.ipa Aperature-iOS.json --repo "$GITHUB_REPOSITORY" --title "Aperature for iPhone 1.0.$N" --notes "$MSG" --latest

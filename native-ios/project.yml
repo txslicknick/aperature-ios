@@ -1,0 +1,57 @@
+# Aperature for iPhone — XcodeGen project (GitHub's macOS runners generate the Xcode project from this).
+# One source body. Many apertures. No compulsory simultaneity.
+name: Aperature
+options:
+  bundleIdPrefix: com.txslicknick
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+packages:
+  MPVKit:
+    url: https://github.com/mpvkit/MPVKit.git
+    exactVersion: 1.0.0
+targets:
+  Aperature:
+    type: application
+    platform: iOS
+    sources:
+      - path: Aperature
+    dependencies:
+      - package: MPVKit
+        product: MPVKit
+    info:
+      path: Aperature/Info.plist
+      properties:
+        CFBundleDisplayName: Aperature
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen:
+          UIColorName: ""
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        UIViewControllerBasedStatusBarAppearance: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UIBackgroundModes: [audio, fetch]
+        BGTaskSchedulerPermittedIdentifiers: [com.txslicknick.aperature.inbox]
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        LSApplicationQueriesSchemes: [outplayer, infuse, vlc-x-callback]
+        # v1.12.10: the Aperature website (Safari, Home Screen) hands files to this app's player
+        CFBundleURLTypes:
+          - CFBundleURLName: com.txslicknick.aperature.player
+            CFBundleURLSchemes: [aperature-player]
+        NSLocalNetworkUsageDescription: Aperature finds your Roku on this Wi-Fi, and plays files through your PC when it is on the same Wi-Fi.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.txslicknick.aperature
+        PRODUCT_NAME: Aperature
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.9"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_BITCODE: NO
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        OTHER_LDFLAGS: ["-ObjC"]
