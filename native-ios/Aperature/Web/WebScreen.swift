@@ -6,6 +6,12 @@ import WebKit
 import SafariServices
 
 let siteURL = URL(string: "https://aperature.lol/")!
+// project.yml WKAppBoundDomains: Aperature, the MyAnimeList and AniList sign-ins (they come back here), trailers
+let appBoundSites = ["aperature.lol", "myanimelist.net", "anilist.co", "youtube-nocookie.com"]
+func isAppBound(_ url: URL) -> Bool {
+    guard let host = url.host?.lowercased() else { return false }
+    return appBoundSites.contains { host == $0 || host.hasSuffix("." + $0) }
+}
 
 struct WebScreen: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> WebViewController { WebViewController() }
@@ -25,6 +31,7 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         config.allowsPictureInPictureMediaPlayback = true
         config.applicationNameForUserAgent = "AperatureApp/1.0 Mobile/15E148 Safari/604.1"
         config.websiteDataStore = .default()
+        config.limitsNavigationsToAppBoundDomains = true   // v1.0.58: turns the service worker on (offline opening)
         let ucc = WKUserContentController()
         ucc.add(WeakHandler(self), name: "aperature")
         ucc.addScriptMessageHandler(ChapterStore.shared, contentWorld: .page, name: "apStore")   // v1.0.58: saved chapters, in the app's own storage
@@ -54,7 +61,9 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
 
     // ---- web → app
     func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
+        // (only Aperature's own page: a sign-in page or a trailer in this web view gets no say over the app)
+        guard message.frameInfo.isMainFrame, message.frameInfo.securityOrigin.host == siteURL.host,
+              let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
         switch type {
         case "play":
             guard let link = body["link"] as? String, let job = PlayJob.decode(link: link) else { return }
@@ -171,6 +180,14 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
     // ---- links: Aperature stays here; other apps (Outplayer, Infuse, VLC) open; other sites open in Safari views
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = action.request.url, let scheme = url.scheme?.lowercased() else { decisionHandler(.allow); return }
+        // v1.0.58: the page itself only goes to the app-bound sites; any other one (a store, a forum, an add-on's setup
+        // page) opens over it in Safari — here it would be refused. Frames inside the page are left to the page.
+        if (scheme == "http" || scheme == "https") && action.targetFrame?.isMainFrame == true && !isAppBound(url) {
+            if url.host?.hasSuffix("apps.apple.com") == true || player != nil || presentedViewController != nil { UIApplication.shared.open(url) }
+            else { present(SFSafariViewController(url: url), animated: true) }
+            decisionHandler(.cancel)
+            return
+        }
         if ["http", "https", "about", "blob", "data"].contains(scheme) {
             decisionHandler(.allow)
             return

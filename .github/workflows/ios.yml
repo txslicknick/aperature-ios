@@ -69,6 +69,7 @@ jobs:
           (cd build/ipa && zip -qry ../Aperature-unsigned.ipa Payload)
           echo "== app contents"; du -sh build/ipa/Payload/Aperature.app; ls -la build/ipa/Payload/Aperature.app; ls build/ipa/Payload/Aperature.app/Frameworks 2>/dev/null || echo "(no embedded frameworks)"
           ls -la build/Aperature-unsigned.ipa
+          echo "== app-bound: $(plutil -extract WKAppBoundDomains json -o - build/ipa/Payload/Aperature.app/Info.plist)"
       # SideStore (free Apple ID): the IPA and its source list go on the site; SideStore updates the app by itself
       - name: Publish the IPA as a release
         if: github.ref == 'refs/heads/main'
