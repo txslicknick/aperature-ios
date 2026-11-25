@@ -27,8 +27,9 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         config.websiteDataStore = .default()
         let ucc = WKUserContentController()
         ucc.add(WeakHandler(self), name: "aperature")
+        ucc.addScriptMessageHandler(ChapterStore.shared, contentWorld: .page, name: "apStore")   // v1.0.58: saved chapters, in the app's own storage
         // v1.12: what this app can do (the page saves downloads through the app when it can)
-        ucc.addUserScript(WKUserScript(source: "window.__apCaps = { download: 1, theater: 1, avplan: 1 }; window.__apNative = 'ios';", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        ucc.addUserScript(WKUserScript(source: "window.__apCaps = { download: 1, theater: 1, avplan: 1, chapterStore: 1 }; window.__apNative = 'ios';", injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.userContentController = ucc
 
         web = WKWebView(frame: .zero, configuration: config)
