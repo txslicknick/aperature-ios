@@ -42,6 +42,10 @@ targets:
           - CFBundleURLName: com.txslicknick.aperature.player
             CFBundleURLSchemes: [aperature-player]
         NSLocalNetworkUsageDescription: Aperature finds your Roku on this Wi-Fi, and plays files through your PC when it is on the same Wi-Fi.
+        # v1.0.58: the site's service worker runs only in an "app-bound" web view, and it's what opens Aperature (and the
+        # saved chapters) with no network. The page can only go to these sites; every other one opens outside it. The same
+        # list as appBoundSites in WebScreen.swift (at most 10).
+        WKAppBoundDomains: [aperature.lol, myanimelist.net, anilist.co, youtube-nocookie.com]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.txslicknick.aperature

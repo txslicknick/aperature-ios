@@ -4,8 +4,15 @@
 import SwiftUI
 import WebKit
 import SafariServices
+import AuthenticationServices
 
 let siteURL = URL(string: "https://aperature.lol/")!
+// project.yml WKAppBoundDomains: Aperature, the MyAnimeList and AniList sign-ins (they come back here), trailers
+let appBoundSites = ["aperature.lol", "myanimelist.net", "anilist.co", "youtube-nocookie.com"]
+func isAppBound(_ url: URL) -> Bool {
+    guard let host = url.host?.lowercased() else { return false }
+    return appBoundSites.contains { host == $0 || host.hasSuffix("." + $0) }
+}
 
 struct WebScreen: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> WebViewController { WebViewController() }
@@ -25,10 +32,12 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         config.allowsPictureInPictureMediaPlayback = true
         config.applicationNameForUserAgent = "AperatureApp/1.0 Mobile/15E148 Safari/604.1"
         config.websiteDataStore = .default()
+        config.limitsNavigationsToAppBoundDomains = true   // v1.0.58: turns the service worker on (offline opening)
         let ucc = WKUserContentController()
         ucc.add(WeakHandler(self), name: "aperature")
+        ucc.addScriptMessageHandler(ChapterStore.shared, contentWorld: .page, name: "apStore")   // v1.0.58: saved chapters, in the app's own storage
         // v1.12: what this app can do (the page saves downloads through the app when it can)
-        ucc.addUserScript(WKUserScript(source: "window.__apCaps = { download: 1, theater: 1 }; window.__apNative = 'ios';", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        ucc.addUserScript(WKUserScript(source: "window.__apCaps = { download: 1, theater: 1, avplan: 1, chapterStore: 1, auth: 1 }; window.__apNative = 'ios';", injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.userContentController = ucc
 
         web = WKWebView(frame: .zero, configuration: config)
@@ -53,7 +62,9 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
 
     // ---- web → app
     func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
+        // (only Aperature's own page: a sign-in page or a trailer in this web view gets no say over the app)
+        guard message.frameInfo.isMainFrame, message.frameInfo.securityOrigin.host == siteURL.host,
+              let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
         switch type {
         case "play":
             guard let link = body["link"] as? String, let job = PlayJob.decode(link: link) else { return }
@@ -71,6 +82,9 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
             guard let p = player, let n = body["n"] as? String, n == p.jobId, let raw = body["list"] as? [[String: Any]] else { return }
             let list = raw.map { d in d.compactMapValues { $0 as? String } }
             p.setSubs(index: (body["i"] as? NSNumber)?.intValue ?? 0, list: list)
+        case "avplan":   // the audio/subtitle plan for an episode (AvPlan.swift)
+            guard let p = player, let n = body["n"] as? String, n == p.jobId, let plan = body["plan"] as? [String: Any] else { return }
+            p.setPlan(index: (body["i"] as? NSNumber)?.intValue ?? 0, plan: plan)
         case "roku-open":
             RokuLauncher.open(typed: body["host"] as? String) { [weak self] r in
                 guard let data = try? JSONEncoder().encode(r), let json = String(data: data, encoding: .utf8) else { return }
@@ -84,11 +98,41 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
             Downloads.shared.delete(id: body["id"] as? String ?? "")
         case "download-keep":
             Downloads.shared.keep(ids: (body["ids"] as? [Any] ?? []).compactMap { $0 as? String })
+        case "auth":   // a MyAnimeList / AniList sign-in
+            if let s = body["url"] as? String, let u = URL(string: s) { signIn(u) }
         case "notify":
             Notifier.shared.setSession(token: body["token"] as? String ?? "", site: body["site"] as? String ?? "")
         default:
             break
         }
+    }
+
+    // v1.0.58: sign-ins run in the iOS sign-in sheet (it has Safari's logins, and Google's and Apple's buttons work
+    // there; in the app's own web view they don't). The sheet starts at the site (?appauth=…), which goes on to the
+    // sign-in page and, when it comes back, hands the result to aperature-auth:// — caught here and given to the app's
+    // page, which finishes it as if the sign-in had come back to it.
+    private var auth: ASWebAuthenticationSession?
+    private func signIn(_ page: URL) {
+        guard page.scheme == "https", ["myanimelist.net", "anilist.co"].contains(page.host ?? "") else { return }
+        var safe = CharacterSet.alphanumerics
+        safe.insert(charactersIn: "-._~")
+        guard let to = page.absoluteString.addingPercentEncoding(withAllowedCharacters: safe),
+              var start = URLComponents(url: siteURL, resolvingAgainstBaseURL: false) else { return }
+        start.percentEncodedQuery = "appauth=" + to
+        guard let startURL = start.url else { return }
+        auth?.cancel()
+        let s = ASWebAuthenticationSession(url: startURL, callbackURLScheme: "aperature-auth") { [weak self] back, _ in
+            DispatchQueue.main.async { self?.signedIn(back) }   // (nil: you closed the sheet — nothing changes)
+        }
+        s.presentationContextProvider = self
+        auth = s
+        s.start()
+    }
+    private func signedIn(_ back: URL?) {
+        guard let back, let r = URLComponents(url: back, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "r" })?.value,
+              r.hasPrefix("?") || r.hasPrefix("#"),
+              let data = try? JSONSerialization.data(withJSONObject: [r]), let arr = String(data: data, encoding: .utf8) else { return }
+        web.evaluateJavaScript("history.replaceState(null, '', '/' + \(arr)[0]); location.reload();", completionHandler: nil)
     }
 
     // v1.12.10: a file from the Aperature website: the page here first learns what it is (so where you stop is saved —
@@ -136,6 +180,10 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
             self?.player = nil
             self?.report(result)
         }
+        vc.planner.event = { [weak self] code, ok in
+            guard let data = try? JSONSerialization.data(withJSONObject: [code]), let arr = String(data: data, encoding: .utf8) else { return }
+            DispatchQueue.main.async { self?.web.evaluateJavaScript("window.__apAvEvent && window.__apAvEvent(\(arr)[0], \(ok ? "true" : "false"))", completionHandler: nil) }
+        }
         vc.askSkips = { [weak self] n, i, d in
             guard let data = try? JSONSerialization.data(withJSONObject: [n]), let arr = String(data: data, encoding: .utf8) else { return }
             self?.web.evaluateJavaScript("window.__apSkips && window.__apSkips(\(arr)[0], \(i), \(d))", completionHandler: nil)
@@ -163,6 +211,14 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
     // ---- links: Aperature stays here; other apps (Outplayer, Infuse, VLC) open; other sites open in Safari views
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = action.request.url, let scheme = url.scheme?.lowercased() else { decisionHandler(.allow); return }
+        // v1.0.58: the page itself only goes to the app-bound sites; any other one (a store, a forum, an add-on's setup
+        // page) opens over it in Safari — here it would be refused. Frames inside the page are left to the page.
+        if (scheme == "http" || scheme == "https") && action.targetFrame?.isMainFrame == true && !isAppBound(url) {
+            if url.host?.hasSuffix("apps.apple.com") == true || player != nil || presentedViewController != nil { UIApplication.shared.open(url) }
+            else { present(SFSafariViewController(url: url), animated: true) }
+            decisionHandler(.cancel)
+            return
+        }
         if ["http", "https", "about", "blob", "data"].contains(scheme) {
             decisionHandler(.allow)
             return
@@ -208,6 +264,10 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
 
     // the page reloads if iOS dropped it in the background
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { webView.reload() }
+}
+
+extension WebViewController: ASWebAuthenticationPresentationContextProviding {
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor { view.window ?? ASPresentationAnchor() }
 }
 
 // WKUserContentController keeps its handlers strongly; this keeps the page's controller free to go.
