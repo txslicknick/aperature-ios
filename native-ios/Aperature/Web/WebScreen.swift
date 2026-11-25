@@ -28,7 +28,7 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         let ucc = WKUserContentController()
         ucc.add(WeakHandler(self), name: "aperature")
         // v1.12: what this app can do (the page saves downloads through the app when it can)
-        ucc.addUserScript(WKUserScript(source: "window.__apCaps = { download: 1, theater: 1 }; window.__apNative = 'ios';", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        ucc.addUserScript(WKUserScript(source: "window.__apCaps = { download: 1, theater: 1, avplan: 1 }; window.__apNative = 'ios';", injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.userContentController = ucc
 
         web = WKWebView(frame: .zero, configuration: config)
@@ -71,6 +71,9 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
             guard let p = player, let n = body["n"] as? String, n == p.jobId, let raw = body["list"] as? [[String: Any]] else { return }
             let list = raw.map { d in d.compactMapValues { $0 as? String } }
             p.setSubs(index: (body["i"] as? NSNumber)?.intValue ?? 0, list: list)
+        case "avplan":   // the audio/subtitle plan for an episode (AvPlan.swift)
+            guard let p = player, let n = body["n"] as? String, n == p.jobId, let plan = body["plan"] as? [String: Any] else { return }
+            p.setPlan(index: (body["i"] as? NSNumber)?.intValue ?? 0, plan: plan)
         case "roku-open":
             RokuLauncher.open(typed: body["host"] as? String) { [weak self] r in
                 guard let data = try? JSONEncoder().encode(r), let json = String(data: data, encoding: .utf8) else { return }
@@ -135,6 +138,10 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         let vc = PlayerViewController(job: job) { [weak self] result in
             self?.player = nil
             self?.report(result)
+        }
+        vc.planner.event = { [weak self] code, ok in
+            guard let data = try? JSONSerialization.data(withJSONObject: [code]), let arr = String(data: data, encoding: .utf8) else { return }
+            DispatchQueue.main.async { self?.web.evaluateJavaScript("window.__apAvEvent && window.__apAvEvent(\(arr)[0], \(ok ? "true" : "false"))", completionHandler: nil) }
         }
         vc.askSkips = { [weak self] n, i, d in
             guard let data = try? JSONSerialization.data(withJSONObject: [n]), let arr = String(data: data, encoding: .utf8) else { return }

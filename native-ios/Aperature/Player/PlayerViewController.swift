@@ -42,6 +42,9 @@ final class PlayerViewController: UIViewController, MPVDelegate {
     private let spinner = UIActivityIndicatorView(style: .large)
     // v1.0.5: Skip intro / recap and Next episode, from the episode's times (Aperature asks AniSkip / IntroDB)
     var askSkips: ((String, Int, Int) -> Void)?
+    // the audio/subtitle plan the page sends for each episode (AvPlan.swift); avEvent: what it did, for the page's totals
+    let planner = AvPlanner()
+    func setPlan(index: Int, plan: [String: Any]) { planner.set(index: index, plan: plan) }
     // v1.0.57 (the owner: "in the middle of ep 10 on my PC, my phone should pick up there"): where you are, sent to the page
     // every ~12 s while playing and at once on pause / play / a jump / the next episode / going to the background
     var pushPos: ((String, Int, Double, Double, String) -> Void)?
@@ -515,6 +518,7 @@ final class PlayerViewController: UIViewController, MPVDelegate {
         // v1.0.55 (the owner: a finished episode is watched, one you skipped or left isn't): each one played past 90%
         if m.duration > 60 && m.position >= m.duration * 0.9 { finishedIdx.insert(m.playlistPos) }
         extSubsTick()   // (v1.0.56)
+        planner.tick(m, paused: paused, userSub: pickedSub != nil, userAudio: pickedAudio != nil)   // the audio/subtitle plan: followed once it's here
         posPush()   // (v1.0.57)
         if let at = sleepAt {
             let left = at.timeIntervalSinceNow
@@ -542,7 +546,7 @@ final class PlayerViewController: UIViewController, MPVDelegate {
             guard let u = x["u"], u.hasPrefix("https://") || u.hasPrefix("http://") else { continue }
             m.command(["sub-add", u, "auto", x["t"] ?? "Subtitles", x["l"] ?? ""])
         }
-        guard let want = job.sl, !want.isEmpty, want != "-", pickedSub == nil else { return }
+        guard let want = job.sl, !want.isEmpty, want != "-", pickedSub == nil, !planner.has(i) else { return }   // (a plan: it chooses)
         let all = m.tracks().filter { $0.type == "sub" }
         if all.contains(where: { $0.selected && Self.sameLang($0.lang, want) }) { return }
         if let t = all.first(where: { !before.contains($0.id) && Self.sameLang($0.lang, want) }) { m.select(t, type: "sub") }
@@ -601,7 +605,7 @@ final class PlayerViewController: UIViewController, MPVDelegate {
     // once a file is going: subtitles or audio the profile didn't choose are switched for one it did (subtitles off when none)
     private var langsCheckedPos = -1
     private func enforceLangs() {
-        guard let m = mpv, m.position > 1, langsCheckedPos != m.playlistPos else { return }
+        guard let m = mpv, m.position > 1, langsCheckedPos != m.playlistPos, !planner.has(m.playlistPos) else { return }   // (a plan: it decides)
         langsCheckedPos = m.playlistPos
         defer { matchSubs() }   // v1.17.23
         let all = m.tracks()
