@@ -11,13 +11,17 @@ import Foundation
 final class AvPlanner {
     private var plans: [Int: [String: Any]] = [:]
     private var applied = Set<Int>()
+    private var decided = Set<Int>()   // the episodes whose subtitles the plan chose (or turned off)
     private var curPos = -1, switches = 0
     private var curK: String?, curSid: String?
     private var lastPos = -1.0, played = 0.0, sinceCheck = 0.0, switchedAt = -Double.infinity, pickedAt = 0.0
     var event: ((String, Bool) -> Void)?   // (code, ok): totals on the page (no names)
 
-    func set(index: Int, plan: [String: Any]) { plans[index] = plan; applied.remove(index) }
-    func has(_ i: Int) -> Bool { plans[i] != nil }
+    func set(index: Int, plan: [String: Any]) { plans[index] = plan; applied.remove(index); decided.remove(index) }
+    // the plan chose this episode's subtitles (or Off): the older rules stand aside. A plan with nothing this player could
+    // load (subtitles only from your own addons, which the server doesn't ask; or none of its links loaded) decides
+    // nothing — the older auto-pick then turns subtitles on as before.
+    func decides(_ i: Int) -> Bool { decided.contains(i) }
 
     // every second
     func tick(_ m: MPV, paused: Bool, userSub: Bool, userAudio: Bool) {
@@ -54,7 +58,7 @@ final class AvPlanner {
             m.command(["sub-add", u, "auto", (e["t"] as? String) ?? "Subtitles", (e["lang"] as? String) ?? ""])
         }
         if userSub { return }
-        if ((plan["subs"] as? [String: Any])?["off"] as? Bool) == true { m.setString("sid", "no"); curK = nil; curSid = nil; return }
+        if ((plan["subs"] as? [String: Any])?["off"] as? Bool) == true { m.setString("sid", "no"); curK = nil; curSid = nil; decided.insert(curPos); return }
         _ = pick(m, order, from: 0, why: "plan")
     }
 
@@ -71,7 +75,7 @@ final class AvPlanner {
                          : all.first(where: { $0.type == "sub" && !$0.file.isEmpty && $0.file == (e["url"] as? String ?? "") })
             guard let t else { if !file { event?("load", false) }; continue }
             if !t.selected { m.setString("sid", t.id) }
-            curK = e["k"] as? String; curSid = t.id; pickedAt = played
+            curK = e["k"] as? String; curSid = t.id; pickedAt = played; decided.insert(curPos)
             if why != "plan" { event?(why, true) }
             return true
         }
@@ -90,11 +94,10 @@ final class AvPlanner {
         guard played - switchedAt >= 60, played - pickedAt >= 10 else { return }
         let order = Self.order(plan)
         guard let cur = order.first(where: { $0["k"] as? String == k }) else { return }
-        let want = ((plan["subs"] as? [String: Any])?["want"] as? String) ?? ""
         var lang = m.getString("current-tracks/sub/lang") ?? ""
         if lang.isEmpty { lang = (cur["lang"] as? String) ?? "" }
         let delay = Double(m.getString("sub-delay") ?? "") ?? 0
-        let why = Self.health(cur, durS: m.duration, atS: pos - delay, ref: Self.refMins(order, k), langOk: want.isEmpty || Self.sameLang(lang, want))
+        let why = Self.health(cur, durS: m.duration, atS: pos - delay, ref: Self.refMins(order, k), langOk: ((cur["lang"] as? String) ?? "").isEmpty || Self.sameLang(lang, (cur["lang"] as? String) ?? ""))   // (the language the plan chose it for)
         guard !why.isEmpty else { return }
         switches += 1
         switchedAt = played
