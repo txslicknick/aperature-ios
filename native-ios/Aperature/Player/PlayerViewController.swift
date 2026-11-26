@@ -546,7 +546,7 @@ final class PlayerViewController: UIViewController, MPVDelegate {
             guard let u = x["u"], u.hasPrefix("https://") || u.hasPrefix("http://") else { continue }
             m.command(["sub-add", u, "auto", x["t"] ?? "Subtitles", x["l"] ?? ""])
         }
-        guard let want = job.sl, !want.isEmpty, want != "-", pickedSub == nil, !planner.has(i) else { return }   // (a plan: it chooses)
+        guard let want = job.sl, !want.isEmpty, want != "-", pickedSub == nil, !planner.decides(i) else { return }   // (the plan chose: it stands; a plan with nothing usable doesn't stop this)
         let all = m.tracks().filter { $0.type == "sub" }
         if all.contains(where: { $0.selected && Self.sameLang($0.lang, want) }) { return }
         if let t = all.first(where: { !before.contains($0.id) && Self.sameLang($0.lang, want) }) { m.select(t, type: "sub") }
@@ -605,7 +605,7 @@ final class PlayerViewController: UIViewController, MPVDelegate {
     // once a file is going: subtitles or audio the profile didn't choose are switched for one it did (subtitles off when none)
     private var langsCheckedPos = -1
     private func enforceLangs() {
-        guard let m = mpv, m.position > 1, langsCheckedPos != m.playlistPos, !planner.has(m.playlistPos) else { return }   // (a plan: it decides)
+        guard let m = mpv, m.position > 1, langsCheckedPos != m.playlistPos, !planner.decides(m.playlistPos) else { return }   // (the plan chose: it decides)
         langsCheckedPos = m.playlistPos
         defer { matchSubs() }   // v1.17.23
         let all = m.tracks()
