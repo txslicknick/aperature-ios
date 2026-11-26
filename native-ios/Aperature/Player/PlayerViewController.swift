@@ -86,6 +86,41 @@ final class PlayerViewController: UIViewController, MPVDelegate {
     private var pickedAudio: String?, pickedSub: String?
     // v1.9.6: how fast files load here, how often this one stopped to load
     private var bwSum = 0.0, bwN = 0, stalls = 0, firstStall = Date(), stallNoted = false
+    // v1.0.58: for the play log, and the way the file comes (straight from the source; this account's PC only if that
+    // fails, and back to the source if it stops to load twice through the PC)
+    private let openedAt = Date()
+    private var startMs = -1, stallSecs = 0.0, stallSince: Date?
+    private var videoCodec = "", audioCodec = "", fileKind = "", fileBytes = 0, videoHeight = 0
+    private var viaPC = false, triedPC = false, pcStalls = 0, pcEntry = -1, usedPC = false
+    private func mediaInfo(_ m: MPV) {
+        guard videoCodec.isEmpty, startMs >= 0 else { return }
+        videoCodec = m.getString("video-format") ?? ""
+        audioCodec = m.getString("audio-codec-name") ?? ""
+        fileKind = String((m.getString("file-format") ?? "").split(separator: ",").first ?? "")
+        fileBytes = Int(m.getString("file-size") ?? "") ?? 0
+        videoHeight = Int(m.getString("video-params/h") ?? "") ?? 0
+    }
+    // the file didn't play from its source: once, through this account's PC (when it answers on this Wi-Fi)
+    private func tryThroughPC(_ m: MPV) -> Bool {
+        let i = m.playlistPos, pos = m.position
+        guard !triedPC, job.rb != nil, i >= 0, i < job.items.count else { return false }
+        triedPC = true
+        job.throughPC { [weak self] r in
+            guard let self, !self.finished, let m = self.mpv else { return }
+            guard i < r.items.count, r.items[i].u != self.job.items[i].u else { self.mpvEnded(error: true); return }
+            self.viaPC = true; self.usedPC = true; self.pcStalls = 0; self.pcEntry = i
+            self.note("Trying through your PC")
+            m.reroute(i, url: r.items[i].u, viaPC: true, at: pos)
+        }
+        return true
+    }
+    private func leavePC(_ m: MPV) {
+        let i = m.playlistPos
+        guard viaPC, i >= 0, i < job.items.count else { return }
+        viaPC = false
+        note("Back to loading straight from the source")
+        m.reroute(i, url: job.items[i].u, viaPC: false, at: m.position)
+    }
 
     init(job: PlayJob, done: @escaping (PlayResult) -> Void) {
         self.job = job
@@ -794,6 +829,7 @@ final class PlayerViewController: UIViewController, MPVDelegate {
     func mpvTime(_ position: Double, _ duration: Double) {
         pip?.update(position: position, duration: duration, paused: paused, played: mpv?.everPlayed ?? false)   // v1.0.80 (iOS)
         if spinner.isAnimating && position > 0 { spinner.stopAnimating() }
+        if startMs < 0 && position > 0 { startMs = Int(Date().timeIntervalSince(openedAt) * 1000) }
         skipTick(position, duration)
         guard !scrubbing else { return }
         timeLabel.text = clock(position)
@@ -810,9 +846,15 @@ final class PlayerViewController: UIViewController, MPVDelegate {
     }
     func mpvBuffering(_ b: Bool) {
         b ? spinner.startAnimating() : spinner.stopAnimating()
-        guard b, let m = mpv, m.everPlayed else { return }
+        if !b, let since = stallSince { stallSecs += Date().timeIntervalSince(since); stallSince = nil }
+        guard b, let m = mpv, m.everPlayed, Date().timeIntervalSince(m.seekedAt) > 4 else { return }   // (not a jump's own load)
         if stalls == 0 { firstStall = Date() }
         stalls += 1
+        stallSince = Date()
+        // v1.0.58: it starts at once, but after a stop it gathers more each time before going on (one longer wait
+        // instead of stop after stop): 4 s, 10 s, then 20 s
+        m.setString("cache-pause-wait", stalls == 1 ? "4" : stalls == 2 ? "10" : "20")
+        if viaPC { pcStalls += 1; if pcStalls >= 2 { leavePC(m) } }
         if !stallNoted && stalls >= 3 && Date().timeIntervalSince(firstStall) < 300 {
             stallNoted = true
             let size = Double(m.getString("file-size") ?? "") ?? 0, dur = m.duration
@@ -834,6 +876,7 @@ final class PlayerViewController: UIViewController, MPVDelegate {
         m.kick()
     }
     private func loadTick() {
+        if let m = mpv { mediaInfo(m) }
         guard let m = mpv, m.getString("demuxer-cache-idle") != "yes", let cs = Double(m.getString("cache-speed") ?? ""), cs > 50000 else { return }
         bwSum += cs; bwN += 1
     }
@@ -842,6 +885,7 @@ final class PlayerViewController: UIViewController, MPVDelegate {
         // v1.0.71 (iOS): auto-skip is once per segment per entry — the next episode's intro at the same time as this
         // one's (common) was never skipped, because autoSkippedAt still held the last episode's start
         if index != shownIndex { shownIndex = index; autoSkippedAt = -1 }
+        if index != pcEntry { viaPC = false }   // (v1.0.58: the next episodes come from their source)
         if index < job.items.count { titleLabel.text = job.items[index].t ?? job.t ?? "" }
         updateNowPlaying(force: true)
         nextButton.isHidden = !((mpv?.hasNext ?? false) || episodic)
@@ -855,6 +899,7 @@ final class PlayerViewController: UIViewController, MPVDelegate {
         // (the sleep timer's question), present() would fail and OK would never come — it just closes
         guard !finished else { return }
         if error {
+            if let m = mpv, tryThroughPC(m) { return }
             guard !errorShown else { return }
             errorShown = true
             if presentedViewController != nil { finish(error: true); return }
@@ -992,7 +1037,10 @@ final class PlayerViewController: UIViewController, MPVDelegate {
         let m = mpv
         let sd = (subDelay() * 1000).rounded() / 1000
         pipWait?.cancel(); pipWait = nil   // v1.0.80 (iOS)
-        let result = PlayResult(n: job.n, i: m?.playlistPos ?? 0, p: sleepReset ? 0 : Int(m?.position ?? 0), d: Int(m?.duration ?? 0), e: error ? 1 : 0, sd: sd, sk: skipSecs, bw: bwN > 0 ? Int(bwSum / Double(bwN)) : 0, st: stalls, pa: pickedAudio, ps: pickedSub, nx: wantNext, an: changedAuto ? (autoplay ? 1 : 0) : nil, vb: changedBoost ? volBoost : nil, so: changedOpacity ? subOpacity : nil, sl: slowHeight, cm: Int((m?.maxBytes ?? 0) >> 20), cf: Int((m?.freeAtStart ?? 0) >> 30), ch: capHits, zz: sleepReset ? 1 : 0, wl: wrongLen ? 1 : 0, w: finishedIdx.sorted())
+        if let since = stallSince { stallSecs += Date().timeIntervalSince(since); stallSince = nil }
+        var result = PlayResult(n: job.n, i: m?.playlistPos ?? 0, p: sleepReset ? 0 : Int(m?.position ?? 0), d: Int(m?.duration ?? 0), e: error ? 1 : 0, sd: sd, sk: skipSecs, bw: bwN > 0 ? Int(bwSum / Double(bwN)) : 0, st: stalls, pa: pickedAudio, ps: pickedSub, nx: wantNext, an: changedAuto ? (autoplay ? 1 : 0) : nil, vb: changedBoost ? volBoost : nil, so: changedOpacity ? subOpacity : nil, sl: slowHeight, cm: Int((m?.maxBytes ?? 0) >> 20), cf: Int((m?.freeAtStart ?? 0) >> 30), ch: capHits, zz: sleepReset ? 1 : 0, wl: wrongLen ? 1 : 0, w: finishedIdx.sorted())
+        result.ms = startMs; result.bs = Int(stallSecs.rounded()); result.vc = videoCodec; result.ac = audioCodec; result.fm = fileKind
+        result.fs = fileBytes; result.vh = videoHeight; result.rt = usedPC ? "home-pc" : "direct"
         if wantNext > 0, let at = sleepAt { Self.carriedSleep = (at: at, handedAt: Date()) } else { Self.carriedSleep = nil }   // v1.0.71 (iOS)
         // v1.0.80 (iOS): PiP ends with the player; mpv is destroyed once no PiP frame is being taken from it
         if let p = pip { pip = nil; p.shutdown { m?.destroy() } } else { m?.destroy() }

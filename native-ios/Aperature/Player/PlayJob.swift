@@ -161,4 +161,14 @@ struct PlayResult: Encodable {
     var zz: Int = 0
     var wl: Int = 0             // v1.16.22: 1 = file i was far longer than the episode (another video): the page plays the next file             // v1.16.15: 1 = the sleep timer's "Still watching?" went unanswered: file i from its start
     var w: [Int] = []           // v1.0.55: the episodes played to the end (their places in the list)
+    // v1.0.58: how the loading went (the site's play log; no addresses): ms to the first picture (-1: never), seconds
+    // spent stopped to load, the file's video / audio codec, kind, size and height, and the way it came
+    var ms: Int = -1
+    var bs: Int = 0
+    var vc: String = ""
+    var ac: String = ""
+    var fm: String = ""
+    var fs: Int = 0
+    var vh: Int = 0
+    var rt: String = "direct"
 }

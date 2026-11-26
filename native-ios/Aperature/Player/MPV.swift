@@ -195,6 +195,24 @@ final class MPV {
         return true
     }
 
+    // v1.0.58: entry i from another address (this account's PC, or back to the source), where it is — also after mpv gave
+    // up on it. `direct` addresses go through the several-connections loader, as at the start.
+    func reroute(_ i: Int, url: String, viaPC: Bool, at pos: Double) {
+        queue.async { [weak self] in
+            guard let self, self.handle != nil, i >= 0, i < self.job.items.count else { return }
+            self.halted = false
+            self.entryPlayed = false
+            var o: [String] = []
+            if pos > 1 { o.append("start=\(Int(pos))") }
+            if let t = self.job.items[i].t, !t.isEmpty { o.append("force-media-title=%\(t.utf8.count)%\(t)") }
+            let u = viaPC ? url : (self.mapUrl?(url) ?? url)
+            self.command(["loadfile", u, "insert-at-play", String(i), o.joined(separator: ",")])
+            self.command(["playlist-remove", String(i + 1)])
+        }
+    }
+    // when the last jump was (a load right after one is the jump, not a stop to load)
+    private(set) var seekedAt = Date.distantPast
+
     // ---- options and properties
     private func opt(_ name: String, _ value: String) { if let h = handle { mpv_set_option_string(h, name, value) } }
     private func set<T>(_ name: String, int64 ref: inout T) { if let h = handle { withUnsafeMutablePointer(to: &ref) { mpv_set_option(h, name, MPV_FORMAT_INT64, $0) } } }
@@ -350,6 +368,8 @@ final class MPV {
                         }
                     default: break
                     }
+                case MPV_EVENT_SEEK:
+                    self.seekedAt = Date()
                 case MPV_EVENT_START_FILE:
                     // v1.0.71 (iOS): each entry starts unplayed the moment mpv starts it (the playlist-pos change can land
                     // after this entry has already ended)

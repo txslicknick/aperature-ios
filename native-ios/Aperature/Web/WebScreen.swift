@@ -68,8 +68,8 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         switch type {
         case "play":
             guard let link = body["link"] as? String, let job = PlayJob.decode(link: link) else { return }
-            // v1.10.1: through this account's PC when it's on the same Wi-Fi (else straight from the source)
-            job.throughPC { [weak self] j in self?.present(job: j) }
+            // v1.0.58: straight from the source; this account's PC (on the same Wi-Fi) only if that fails (the player)
+            present(job: job)
         case "skips":
             guard let p = player, let n = body["n"] as? String, n == p.jobId else { return }
             let seg: (Any?) -> [Double]? = { v in
@@ -144,10 +144,10 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         guard let job = PlayJob.decode(link: link) else { return }
         if let r = PlayJob.carriedRun(link: link) {
             web.evaluateJavaScript("window.__apAdoptRun && window.__apAdoptRun(\(r), \(PlayJob.jsString(job.n)))") { [weak self] _, _ in
-                job.throughPC { j in self?.present(job: j) }
+                self?.present(job: job)
             }
         } else {
-            job.throughPC { [weak self] j in self?.present(job: j) }
+            present(job: job)
         }
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
